@@ -1,4 +1,4 @@
-name: Build custom frida-gadget (iOS arm64, embedded script)
+name: build-gadget
 
 on:
   workflow_dispatch:
@@ -13,35 +13,21 @@ jobs:
           git clone --recurse-submodules --branch 16.7.18 --depth 1 https://github.com/frida/frida.git
           cd frida
           python3 tools/ensure-submodules.py
-      - name: Patch gadget default config
+      - name: Find + patch gadget config source
         run: |
           cd frida
-          F=$(find . -path '*gadget*config*.c' | grep -v test | head -1)
-          echo "config source: $F"
-          if [ -n "$F" ]; then
-            grep -n "127.0.0.1" "$F" | head -3
-            python3 - "$F" <<'PYEOF'
-import sys
-p = sys.argv[1]
-s = open(p).read()
-old = 'g_strdup ("127.0.0.1")'
-if old in s:
-    s = s.replace(old, 'g_strdup ("0.0.0.0")')
-    open(p, 'w').write(s)
-    print("patched address default")
-PYEOF
-          fi
+          find . -path '*gadget*' -name '*.c' | head -20
+          find . -name 'config.c' -path '*gadget*' | head -5
       - name: Install deps
         run: |
           cd frida
           python3 releng/deps.py
-      - name: Configure + build gadget (iOS arm64)
+      - name: Configure + build gadget
         run: |
           cd frida
-          export SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path)
-          ./configure --enable-gadget --disable-server --disable-portal --disable-inject --disable-frida-tools --host=ios-arm64
+          ./configure --enable-gadget --disable-server --disable-portal --disable-inject --disable-frida-tools
           make -j2
-          find . -name "frida-gadget*.dylib" | head -5
+          find . -name "frida-gadget*" -not -path "./subprojects/*" | head -5
       - name: Upload gadget
         uses: actions/upload-artifact@v4
         with:
