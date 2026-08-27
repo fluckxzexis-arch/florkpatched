@@ -129,6 +129,8 @@ static NSString *FFModel(id self, SEL _cmd) { return @"iPhone"; }
 static NSString *FFOSVersionString(id self, SEL _cmd) { return @"Version 18.5 (Build 22F76)"; }
 
 static void FFInstallSwizzles(void) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
     Method m;
 
     m = class_getClassMethod(objc_getClass("NSURL"), @selector(URLWithString:));
@@ -147,6 +149,7 @@ static void FFInstallSwizzles(void) {
     if (m) method_setImplementation(m, (IMP)FFOSVersionString);
 
     NSLog(@"[FluckBypass] swizzles installed");
+    });
 }
 
 /* ── slot fill ── */
