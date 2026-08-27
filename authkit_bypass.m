@@ -173,20 +173,14 @@ static void FFFillSlots(void) {
 
 /* ── startup ── */
 
-/* called by patch.m's ESP-install flow (kept for the linkage) */
+/* called by patch.m's flow (kept for the linkage); the dylib is key-auth +
+   redirect + device fakes only — the ESP gates are handled externally */
 __attribute__((visibility("default"))) void FFInstallAuthKitBypass(void) {
-    static BOOL done = NO;
-    if (done) return;
-    done = YES;
     FFInstallSwizzles();
-    FFManifestData();
-    FFFillSlots();
-    NSLog(@"[FluckBypass] v3 installed (via FFInstallAuthKitBypass)");
 }
 
 __attribute__((constructor)) static void FFBypassInit(void) {
     FFInstallSwizzles();
     FFManifestData();
-    FFFillSlots();
-    NSLog(@"[FluckBypass] v3 loaded");
+    NSLog(@"[FluckBypass] v4 loaded (key-auth + redirect only)");
 }
