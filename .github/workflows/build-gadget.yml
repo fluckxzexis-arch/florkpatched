@@ -26,6 +26,11 @@ jobs:
           ln -sf "$P12" /opt/homebrew/bin/python3
           ln -sf "$P12" /usr/local/bin/python3 2>/dev/null || true
           python3 --version
+      - name: Patch meson (drop frida-python subproject)
+        run: |
+          cd frida
+          sed -i.bak "/frida-python/d" meson.build
+          grep -n "frida-python" meson.build || echo "python subproject removed"
       - name: Configure + build gadget
         run: |
           cd frida
