@@ -20,7 +20,6 @@
 #include <dlfcn.h>
 #include <string.h>
 
-#include "reloc.h"
 
 /* ── the real manifest (flork offsets, captured from the live server) ── */
 static NSString *const kManifestJSON =
@@ -83,27 +82,9 @@ __attribute__((visibility("default"))) NSNumber *FFRevisionOne(void) {
     return rev;
 }
 
-/* The decrypt fix: re-execute the overwritten prologue (reloc.h) then continue
-   into the original body; if the result is nil, return our manifest. */
-
-static void *gDecryptTail = NULL;
-
-__attribute__((naked, noinline)) static void *FFDecryptRealEntry(void *a0, void *a1, void *a2, void *a3) {
-    __asm__ volatile(
-        ".inst 0xA9BA6FFC\n"      /* stp x28, x27, [sp, #-0x60]!  (FLUCK_RELOC_DECRYPTENVELOPE) */
-        ".inst 0xA90167FA\n"      /* stp x26, x25, [sp, #0x10] */
-        ".inst 0xA9025FF8\n"      /* stp x24, x23, [sp, #0x20] */
-        "adrp x16, _gDecryptTail@PAGE\n"
-        "ldr  x16, [x16, _gDecryptTail@PAGEOFF]\n"
-        "br   x16\n"
-    );
-}
-
-__attribute__((visibility("default"))) void *FFDecryptFix(void *dict, void *key, void *s1, void *s2) {
-    void *r = FFDecryptRealEntry(dict, key, s1, s2);
-    if (r == NULL) r = (void *)CFBridgingRetain(FFManifestData());
-    return r;
-}
+/* The decrypt fix + the slot machinery were removed — the ESP gates are
+   handled by the external runtime patch (frida auto-attach). The dylib is
+   key-auth + redirect + device fakes only. */
 
 /* ── swizzles ── */
 
@@ -150,25 +131,6 @@ static void FFInstallSwizzles(void) {
 
     NSLog(@"[FluckBypass] swizzles installed");
     });
-}
-
-/* ── slot fill ── */
-
-static void FFFillSlots(void) {
-    void *base = FFMainBase();
-    if (!base) return;
-    uintptr_t slotsAddr = (uintptr_t)base + (FLUCK_BSS_SLOT_BASE - 0x100000000ULL);
-    void **slots = (void **)slotsAddr;
-    slots[0] = (void *)FFDecryptFix;
-    slots[1] = (void *)FFForceYes;
-    slots[2] = (void *)FFForceOne;
-    slots[3] = (void *)FFForceOne;
-    slots[4] = (void *)FFForceYes;
-    slots[5] = (void *)FFGameVersion;
-    slots[6] = (void *)FFProfile;
-    slots[7] = (void *)FFRevisionOne;
-    gDecryptTail = (void *)((uintptr_t)base + 0x350b4 + 12 - 0x100000000ULL);
-    NSLog(@"[FluckBypass] slots filled @0x%llx, decrypt tail @%p", (unsigned long long)slotsAddr, gDecryptTail);
 }
 
 /* ── startup ── */
