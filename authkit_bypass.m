@@ -20,6 +20,7 @@
 #include <dlfcn.h>
 #include <string.h>
 
+#include "reloc.h"
 
 /* ── the real manifest (flork offsets, captured from the live server) ── */
 static NSString *const kManifestJSON =
@@ -69,7 +70,33 @@ static void *FFMainBase(void) {
     return (void *)(0x100000000ULL + _dyld_get_image_vmaddr_slide(0));
 }
 
-/* ── exported trampolines ── */
+/* ── exported trampolines ──
+   The force-gates call the ORIGINAL body (the side-effects preserved) and then
+   override the return. The tails are filled at the load (the base + off + 12). */
+
+static void *gTailHVL = NULL;
+static void *gTailPPS = NULL;
+static void *gTailPPA = NULL;
+static void *gTailVS  = NULL;
+
+#define TRAMP(name, i0, i1, i2, tailvar) \
+__attribute__((naked, noinline, visibility("default"))) int name(void) { \
+    __asm__ volatile( \
+        ".inst " #i0 "\n" \
+        ".inst " #i1 "\n" \
+        ".inst " #i2 "\n" \
+        "adrp x16, " #tailvar "@PAGE\n" \
+        "ldr  x16, [x16, " #tailvar "@PAGEOFF]\n" \
+        "blr  x16\n" \
+        "mov  x0, #1\n" \
+        "ret\n" \
+    ); \
+}
+
+TRAMP(FFHVL, 0xA9BA6FFC, 0xA90167FA, 0xA9025FF8, _gTailHVL)
+TRAMP(FFPPS, 0xD102C3FF, 0xA90667FA, 0xA9075FF8, _gTailPPS)
+TRAMP(FFPPA, 0xA9BA6FFC, 0xA90167FA, 0xA9025FF8, _gTailPPA)
+TRAMP(FFVS,  0xA9BA6FFC, 0xA90167FA, 0xA9025FF8, _gTailVS)
 
 __attribute__((visibility("default"))) BOOL FFForceYes(void) { return YES; }
 __attribute__((visibility("default"))) uintptr_t FFForceOne(void) { return 1; }
@@ -82,9 +109,27 @@ __attribute__((visibility("default"))) NSNumber *FFRevisionOne(void) {
     return rev;
 }
 
-/* The decrypt fix + the slot machinery were removed — the ESP gates are
-   handled by the external runtime patch (frida auto-attach). The dylib is
-   key-auth + redirect + device fakes only. */
+/* The decrypt fix: re-execute the overwritten prologue (reloc.h) then continue
+   into the original body; if the result is nil, return our manifest. */
+
+static void *gDecryptTail = NULL;
+
+__attribute__((naked, noinline)) static void *FFDecryptRealEntry(void *a0, void *a1, void *a2, void *a3) {
+    __asm__ volatile(
+        ".inst 0xA9BA6FFC\n"      /* stp x28, x27, [sp, #-0x60]!  (FLUCK_RELOC_DECRYPTENVELOPE) */
+        ".inst 0xA90167FA\n"      /* stp x26, x25, [sp, #0x10] */
+        ".inst 0xA9025FF8\n"      /* stp x24, x23, [sp, #0x20] */
+        "adrp x16, _gDecryptTail@PAGE\n"
+        "ldr  x16, [x16, _gDecryptTail@PAGEOFF]\n"
+        "br   x16\n"
+    );
+}
+
+__attribute__((visibility("default"))) void *FFDecryptFix(void *dict, void *key, void *s1, void *s2) {
+    void *r = FFDecryptRealEntry(dict, key, s1, s2);
+    if (r == NULL) r = (void *)CFBridgingRetain(FFManifestData());
+    return r;
+}
 
 /* ── swizzles ── */
 
@@ -95,14 +140,9 @@ static NSString *FFRedirectedURLString(NSString *orig) {
     return orig;
 }
 
-static IMP gOrigURLWithString = NULL;
-
 static NSURL *FFURLWithString(id self, SEL _cmd, NSString *str) {
     NSString *r = FFRedirectedURLString(str);
-    if (gOrigURLWithString) {
-        return ((NSURL *(*)(id, SEL, NSString *))gOrigURLWithString)(self, _cmd, r);
-    }
-    return nil;
+    return ((NSURL *(*)(id, SEL, NSString *))objc_msgSend)(self, _cmd, r);
 }
 
 static NSString *FFSystemVersion(id self, SEL _cmd) { return @"18.5"; }
@@ -110,15 +150,10 @@ static NSString *FFModel(id self, SEL _cmd) { return @"iPhone"; }
 static NSString *FFOSVersionString(id self, SEL _cmd) { return @"Version 18.5 (Build 22F76)"; }
 
 static void FFInstallSwizzles(void) {
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
     Method m;
 
     m = class_getClassMethod(objc_getClass("NSURL"), @selector(URLWithString:));
-    if (m) {
-        gOrigURLWithString = method_getImplementation(m);
-        method_setImplementation(m, (IMP)FFURLWithString);
-    }
+    if (m) method_setImplementation(m, (IMP)FFURLWithString);
 
     m = class_getInstanceMethod(objc_getClass("UIDevice"), @selector(systemVersion));
     if (m) method_setImplementation(m, (IMP)FFSystemVersion);
@@ -130,19 +165,47 @@ static void FFInstallSwizzles(void) {
     if (m) method_setImplementation(m, (IMP)FFOSVersionString);
 
     NSLog(@"[FluckBypass] swizzles installed");
-    });
+}
+
+/* ── slot fill ── */
+
+static void FFFillSlots(void) {
+    void *base = FFMainBase();
+    if (!base) return;
+    uintptr_t slotsAddr = (uintptr_t)base + (FLUCK_BSS_SLOT_BASE - 0x100000000ULL);
+    void **slots = (void **)slotsAddr;
+    slots[0] = (void *)FFDecryptFix;
+    slots[1] = (void *)FFHVL;
+    slots[2] = (void *)FFPPS;
+    slots[3] = (void *)FFPPA;
+    slots[4] = (void *)FFVS;
+    gTailHVL = (void *)((uintptr_t)base + 0x466fc + 12 - 0x100000000ULL);
+    gTailPPS = (void *)((uintptr_t)base + 0x6611c + 12 - 0x100000000ULL);
+    gTailPPA = (void *)((uintptr_t)base + 0x67a74 + 12 - 0x100000000ULL);
+    gTailVS  = (void *)((uintptr_t)base + 0x6a574 + 12 - 0x100000000ULL);
+    slots[5] = (void *)FFGameVersion;
+    slots[6] = (void *)FFProfile;
+    slots[7] = (void *)FFRevisionOne;
+    gDecryptTail = (void *)((uintptr_t)base + 0x350b4 + 12 - 0x100000000ULL);
+    NSLog(@"[FluckBypass] slots filled @0x%llx, decrypt tail @%p", (unsigned long long)slotsAddr, gDecryptTail);
 }
 
 /* ── startup ── */
 
-/* called by patch.m's flow (kept for the linkage); the dylib is key-auth +
-   redirect + device fakes only — the ESP gates are handled externally */
+/* called by patch.m's ESP-install flow (kept for the linkage) */
 __attribute__((visibility("default"))) void FFInstallAuthKitBypass(void) {
+    static BOOL done = NO;
+    if (done) return;
+    done = YES;
     FFInstallSwizzles();
+    FFManifestData();
+    FFFillSlots();
+    NSLog(@"[FluckBypass] v3 installed (via FFInstallAuthKitBypass)");
 }
 
 __attribute__((constructor)) static void FFBypassInit(void) {
     FFInstallSwizzles();
     FFManifestData();
-    NSLog(@"[FluckBypass] v4 loaded (key-auth + redirect only)");
+    FFFillSlots();
+    NSLog(@"[FluckBypass] v3 loaded");
 }

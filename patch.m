@@ -403,8 +403,20 @@ static void FFInstallEspBypass(void) {
             });
             method_setImplementation(m, imp);
         }
-        /* ESP activation itself is handled by the external runtime patch
-           (frida auto-attach) — the dylib stays key-auth only. */
+        /* ensure AuthKit gates are kernel-patched before activation runs */
+        const char *gates[] = { "setESPEnabledAndRun:", "toggleESP" };
+        for (unsigned i = 0; i < sizeof(gates) / sizeof(gates[0]); i++) {
+            Method g = class_getInstanceMethod(esp, sel_registerName(gates[i]));
+            if (!g) continue;
+            IMP origImp = method_getImplementation(g);
+            const char *gateName = gates[i];
+            SEL gateSel = sel_registerName(gateName);
+            IMP imp = imp_implementationWithBlock(^(id _self, id arg) {
+                FFInstallAuthKitBypass();
+                return ((id (*)(id, SEL, id))origImp)(_self, gateSel, arg);
+            });
+            method_setImplementation(g, imp);
+        }
     }
 }
 
