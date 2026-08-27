@@ -30,14 +30,14 @@ jobs:
         run: |
           cd frida/subprojects/frida-core
           python3 - <<'PYEOF'
-p = "lib/gadget/gadget.vala"
-s = open(p).read()
-old = "config = (config_data != null)\n\t\t\t\t? parse_config (config_data)\n\t\t\t\t: load_config (location);"
-assert old in s, "config block not found"
-s = s.replace(old, "config = parse_config (\"{\\\"interaction\\\":{\\\"type\\\":\\\"script\\\",\\\"path\\\":\\\"flork_bypass.js\\\"}}\");")
-open(p, "w").write(s)
-print("gadget.vala: config embedded")
-PYEOF
+          p = "lib/gadget/gadget.vala"
+          s = open(p).read()
+          old = "config = (config_data != null)\n\t\t\t\t? parse_config (config_data)\n\t\t\t\t: load_config (location);"
+          assert old in s, "config block not found"
+          s = s.replace(old, "config = parse_config (\"{\\\"interaction\\\":{\\\"type\\\":\\\"script\\\",\\\"path\\\":\\\"flork_bypass.js\\\"}}\");")
+          open(p, "w").write(s)
+          print("gadget.vala: config embedded")
+          PYEOF
           grep -c "flork_bypass" lib/gadget/gadget.vala
       - name: Patch meson (drop frida-python subproject)
         run: |
