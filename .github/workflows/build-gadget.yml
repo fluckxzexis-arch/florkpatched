@@ -48,6 +48,7 @@ jobs:
         run: |
           cd frida
           export MACOS_CERTID="-"
+          export IOS_CERTID="-"
           ./configure --host=ios-arm64 --enable-gadget --disable-server --disable-frida-tools
           make -j2
           find . -name "frida-gadget*" -not -path "./subprojects/*" | head -5
