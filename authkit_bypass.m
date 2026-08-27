@@ -162,6 +162,17 @@ static void FFFillSlots(void) {
 
 /* ── startup ── */
 
+/* called by patch.m's ESP-install flow (kept for the linkage) */
+__attribute__((visibility("default"))) void FFInstallAuthKitBypass(void) {
+    static BOOL done = NO;
+    if (done) return;
+    done = YES;
+    FFInstallSwizzles();
+    FFManifestData();
+    FFFillSlots();
+    NSLog(@"[FluckBypass] v3 installed (via FFInstallAuthKitBypass)");
+}
+
 __attribute__((constructor)) static void FFBypassInit(void) {
     FFInstallSwizzles();
     FFManifestData();
