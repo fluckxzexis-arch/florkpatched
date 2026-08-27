@@ -19,10 +19,6 @@ jobs:
           find . -name 'config.c' | head -10 || true
           find . -iname '*gadget*' -maxdepth 4 | head -20 || true
           ls subprojects/ | head -10 || true
-      - name: Install deps
-        run: |
-          cd frida
-          python3 releng/deps.py sync
       - name: Configure + build gadget
         run: |
           cd frida
