@@ -22,7 +22,7 @@ jobs:
       - name: Install deps
         run: |
           cd frida
-          python3 releng/deps.py
+          python3 releng/deps.py sync
       - name: Configure + build gadget
         run: |
           cd frida
