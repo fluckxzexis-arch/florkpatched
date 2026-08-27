@@ -19,6 +19,13 @@ jobs:
           find . -name 'config.c' | head -10 || true
           find . -iname '*gadget*' -maxdepth 4 | head -20 || true
           ls subprojects/ | head -10 || true
+      - name: Drop frida-python subproject
+        run: |
+          cd frida
+          git submodule deinit -f subprojects/frida-python || true
+          rm -rf subprojects/frida-python
+          git submodule deinit -f subprojects/frida-node || true
+          rm -rf subprojects/frida-node
       - name: Configure + build gadget
         run: |
           cd frida
