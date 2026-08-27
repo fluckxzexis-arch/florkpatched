@@ -15,6 +15,7 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 #import <mach-o/dyld.h>
 #include <dlfcn.h>
 #include <string.h>
