@@ -13,11 +13,12 @@ jobs:
           git clone --recurse-submodules --branch 16.7.18 --depth 1 https://github.com/frida/frida.git
           cd frida
           python3 tools/ensure-submodules.py
-      - name: Find + patch gadget config source
+      - name: Find gadget config source
         run: |
           cd frida
-          find . -path '*gadget*' -name '*.c' | head -20
-          find . -name 'config.c' -path '*gadget*' | head -5
+          find . -name 'config.c' | head -10 || true
+          find . -iname '*gadget*' -maxdepth 4 | head -20 || true
+          ls subprojects/ | head -10 || true
       - name: Install deps
         run: |
           cd frida
