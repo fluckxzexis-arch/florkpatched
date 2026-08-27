@@ -10,7 +10,7 @@ jobs:
     steps:
       - name: Clone frida
         run: |
-          git clone --recurse-submodules --branch 16.7.18 --depth 1 https://github.com/frida/frida.git
+          git clone --recurse-submodules --branch 17.2.0 --depth 1 https://github.com/frida/frida.git
           cd frida
           python3 tools/ensure-submodules.py
       - name: Find gadget config source
