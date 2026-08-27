@@ -34,6 +34,7 @@ jobs:
       - name: Configure + build gadget
         run: |
           cd frida
+          export MACOS_CERTID="-"
           ./configure --enable-gadget --disable-server --disable-frida-tools
           make -j2
           find . -name "frida-gadget*" -not -path "./subprojects/*" | head -5
