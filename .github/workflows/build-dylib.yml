@@ -1,0 +1,37 @@
+name: Build patch.dylib (arm64)
+
+on:
+  workflow_dispatch:
+  push:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build dylib (arm64) with Xcode clang
+        run: |
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          MIN="-mios-version-min=16.5"
+          mkdir -p out
+          xcrun --sdk iphoneos clang -dynamiclib -arch arm64 -target arm64-apple-ios16.5 \
+            -isysroot "$SDK" $MIN -fobjc-arc -Wno-deprecated-declarations \
+            -framework UIKit -framework Foundation -framework Security \
+            -o out/patch.dylib patch.m authkit_bypass.m
+          lipo -info out/patch.dylib
+
+      - name: Sign with ldid
+        run: |
+          brew install ldid 2>&1 | tail -1 || true
+          export PATH="$PATH:$(brew --prefix)/bin:$(brew --prefix)/sbin"
+          ldid -S out/patch.dylib
+          echo "signed"
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: patch-dylib
+          path: out/patch.dylib
+          if-no-files-found: error

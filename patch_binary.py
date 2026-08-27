@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+"""Fl0rkFF offline __TEXT patcher.
+Patches the 8 AuthKit function entries with 12-byte absolute-jump stubs that read
+their target from __bss slots (filled at runtime by FluckBypass.dylib's +load).
+Emits reloc.h with the overwritten instructions for the dylib's naked re-entry.
+
+Entry list (runtime-proven offsets):
+  DecryptEnvelope       0x350b4  -> FFDecryptFix  (nil -> manifest)
+  HasValidLicense       0x466fc  -> FFForceYes
+  PrepareProtectedSync  0x6611c  -> FFForceOne
+  PrepareProtectedAsync 0x67a74  -> FFForceOne
+  VerifySignature       0x6a574  -> FFForceYes
+  OffsetsCurrentGameVer 0x7ffd4  -> FFGameVersion
+  OffsetsCurrentProfile 0x7f174  -> FFProfile
+  OffsetsCurrentRevision 0x80980 -> FFRevisionOne
+"""
+import struct
+import sys
+
+ENTRIES = [
+    ("DecryptEnvelope",        0x350b4),
+    ("HasValidLicense",        0x466fc),
+    ("PrepareProtectedSync",   0x6611c),
+    ("PrepareProtectedAsync",  0x67a74),
+    ("VerifySignature",        0x6a574),
+    ("OffsetsCurrentGameVer",  0x7ffd4),
+    ("OffsetsCurrentProfile",  0x7f174),
+    ("OffsetsCurrentRevision", 0x80980),
+]
+
+SLOT_SIZE = 8
+NUM_SLOTS = len(ENTRIES)
+BSS_EXTRA = NUM_SLOTS * SLOT_SIZE
+
+
+def enc_adrp_ldr_br(slot_vaddr):
+    """encode: adrp x16, page(slot); ldr x16, [x16, pageoff]; br x16"""
+    page = slot_vaddr & ~0xFFF
+    off = slot_vaddr & 0xFFF
+    diff = page - ((slot_vaddr + 4) & ~0xFFF)  # we know the addr at patch time below
+    # we encode with the placeholder; the caller supplies the actual pc
+    raise NotImplementedError
+
+
+def patch(path_in, path_out, hdr_out):
+    data = bytearray(open(path_in, "rb").read())
+
+    # ---- locate __DATA segment + __bss section (S_GB_ZEROFILL) ----
+    # Mach-O header: magic(4) cputype(4) cpusubtype(4) filetype(4) ncmds(4) sizeofcmds(4) flags(4) reserved(4)
+    magic = struct.unpack_from("<I", data, 0)[0]
+    if magic != 0xFEEDFACF:
+        print("not a 64-bit little-endian Mach-O (magic=%x)" % magic)
+        sys.exit(1)
+    ncmds = struct.unpack_from("<I", data, 16)[0]
+    off = 32
+    segs = []
+    for _ in range(ncmds):
+        cmd, cmdsize = struct.unpack_from("<II", data, off)
+        if cmd == 0x19:  # LC_SEGMENT_64
+            segname = data[off + 8:off + 24].rstrip(b"\0").decode()
+            vmaddr = struct.unpack_from("<Q", data, off + 24)[0]
+            vmsize = struct.unpack_from("<Q", data, off + 32)[0]
+            fileoff = struct.unpack_from("<Q", data, off + 40)[0]
+            filesize = struct.unpack_from("<Q", data, off + 48)[0]
+            nsects = struct.unpack_from("<I", data, off + 64)[0]
+            segs.append({"name": segname, "cmd_off": off, "vmaddr": vmaddr,
+                         "vmsize": vmsize, "fileoff": fileoff, "filesize": filesize,
+                         "nsects": nsects, "sects_off": off + 72})
+        off += cmdsize
+
+    bss = None
+    data_seg = None
+    for s in segs:
+        if s["name"] != "__DATA":
+            continue
+        data_seg = s
+        so = s["sects_off"]
+        for i in range(s["nsects"]):
+            seco = so + i * 80
+            sname = data[seco:seco + 16].rstrip(b"\0").decode()
+            flags = struct.unpack_from("<I", data, seco + 56)[0]
+            if sname == "__bss":  # zerofill by name
+                bss = {
+                    "seco": seco, "addr": struct.unpack_from("<Q", data, seco + 32)[0],
+                    "size": struct.unpack_from("<Q", data, seco + 40)[0],
+                }
+    if not bss:
+        print("__bss not found")
+        sys.exit(1)
+
+    print("__bss: vaddr=0x%x size=0x%x" % (bss["addr"], bss["size"]))
+    slot_base = (bss["addr"] + bss["size"] + 7) & ~7
+
+    # ---- extend __bss + the segment vmsize ----
+    new_bss_size = (bss["size"] + BSS_EXTRA + 7) & ~7
+    struct.pack_into("<Q", data, bss["seco"] + 40, new_bss_size)
+    # the __DATA segment vmsize += extra (the bss tail)
+    new_dseg_vmsize = data_seg["vmsize"] + BSS_EXTRA + 8
+    struct.pack_into("<Q", data, data_seg["cmd_off"] + 32, new_dseg_vmsize)
+
+    # ---- encode + apply the stubs ----
+    relocs = []
+    for idx, (name, entry) in enumerate(ENTRIES):
+        slot = slot_base + idx * SLOT_SIZE
+        # stub pc = entry (the __TEXT file offset == vaddr-0x100000000 for this binary)
+        pc = entry
+        page = slot & ~0xFFF
+        pageoff = slot & 0xFFF
+        adrp_imm = ((page - (pc & ~0xFFF)) >> 12) & 0x1FFFFF
+        adrp = 0x90000010 | ((adrp_imm & 0x3) << 29) | ((adrp_imm >> 2) << 5)
+        ldr = 0xF9400210 | ((pageoff >> 3) << 10)  # ldr x16, [x16, #pageoff]
+        br = 0xD61F0200  # br x16
+        stub = struct.pack("<III", adrp, ldr, br)
+        old = bytes(data[entry:entry + 12])
+        relocs.append((name, entry, old))
+        data[entry:entry + 12] = stub
+        print("patched %-24s @0x%x -> slot 0x%x (adrp=%08x)" % (name, entry, slot, adrp))
+
+    open(path_out, "wb").write(data)
+    print("wrote %s" % path_out)
+
+    # ---- emit reloc.h ----
+    with open(hdr_out, "w") as f:
+        f.write("/* generated by patch_binary.py — overwritten prologue bytes */\n")
+        f.write("#define FLUCK_BSS_SLOT_BASE 0x%xULL\n" % slot_base)
+        f.write("#define FLUCK_BSS_EXTRA %d\n" % BSS_EXTRA)
+        for name, entry, old in relocs:
+            insts = struct.unpack("<III", old)
+            f.write("/* %s @0x%x */\n" % (name, entry))
+            f.write("#define FLUCK_RELOC_%s 0x%08X, 0x%08X, 0x%08X\n"
+                    % (name.upper(), insts[0], insts[1], insts[2]))
+    print("wrote %s" % hdr_out)
+
+
+if __name__ == "__main__":
+    patch(sys.argv[1], sys.argv[2], sys.argv[3])
