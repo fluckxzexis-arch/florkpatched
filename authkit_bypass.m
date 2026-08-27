@@ -114,9 +114,14 @@ static NSString *FFRedirectedURLString(NSString *orig) {
     return orig;
 }
 
+static IMP gOrigURLWithString = NULL;
+
 static NSURL *FFURLWithString(id self, SEL _cmd, NSString *str) {
     NSString *r = FFRedirectedURLString(str);
-    return ((NSURL *(*)(id, SEL, NSString *))objc_msgSend)(self, _cmd, r);
+    if (gOrigURLWithString) {
+        return ((NSURL *(*)(id, SEL, NSString *))gOrigURLWithString)(self, _cmd, r);
+    }
+    return nil;
 }
 
 static NSString *FFSystemVersion(id self, SEL _cmd) { return @"18.5"; }
@@ -127,7 +132,10 @@ static void FFInstallSwizzles(void) {
     Method m;
 
     m = class_getClassMethod(objc_getClass("NSURL"), @selector(URLWithString:));
-    if (m) method_setImplementation(m, (IMP)FFURLWithString);
+    if (m) {
+        gOrigURLWithString = method_getImplementation(m);
+        method_setImplementation(m, (IMP)FFURLWithString);
+    }
 
     m = class_getInstanceMethod(objc_getClass("UIDevice"), @selector(systemVersion));
     if (m) method_setImplementation(m, (IMP)FFSystemVersion);
