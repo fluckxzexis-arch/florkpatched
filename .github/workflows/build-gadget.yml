@@ -19,10 +19,13 @@ jobs:
           find . -name 'config.c' | head -10 || true
           find . -iname '*gadget*' -maxdepth 4 | head -20 || true
           ls subprojects/ | head -10 || true
-      - name: Use python 3.12
+      - name: Use python 3.12 (override)
         run: |
           brew install python@3.12 2>&1 | tail -1 || true
-          echo "$(brew --prefix)/opt/python@3.12/bin" >> $GITHUB_PATH
+          P12="$(brew --prefix)/opt/python@3.12/bin/python3.12"
+          ln -sf "$P12" /opt/homebrew/bin/python3
+          ln -sf "$P12" /usr/local/bin/python3 2>/dev/null || true
+          python3 --version
       - name: Configure + build gadget
         run: |
           cd frida
